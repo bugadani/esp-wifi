@@ -872,52 +872,138 @@ impl<'d> WifiController<'d> {
 
         Ok(mode == wifi_mode_t_WIFI_MODE_AP || mode == wifi_mode_t_WIFI_MODE_APSTA)
     }
+}
 
-    fn scan_result_count(&mut self) -> Result<usize, WifiError> {
-        let mut bss_total: u16 = 0;
+struct ScanResults {
+    count: usize,
+}
 
-        unsafe {
-            esp_wifi_result!(crate::binary::include::esp_wifi_scan_get_ap_num(
-                &mut bss_total
-            ))
-            .map_err(|e| {
-                crate::binary::include::esp_wifi_clear_ap_list();
-                e
-            })?;
-        }
+impl ScanResults {
+    pub fn new() -> Self {
+        let mut bss_total = 0;
 
-        Ok(bss_total as usize)
+        // `esp_wifi_scan_get_ap_num` shouldn't return an error. It's documentation lists state
+        // errors that would trip previous checks, and ESP_ERR_INVALID_ARG.
+        let count = esp_wifi_result!(unsafe {
+            crate::binary::include::esp_wifi_scan_get_ap_num(&mut bss_total)
+        })
+        .map(|_| bss_total as usize)
+        .unwrap_or(0);
+
+        Self { count }
     }
 
-    fn scan_results<const N: usize>(
+    pub fn remaining(&self) -> usize {
+        self.count
+    }
+
+    #[cfg(not(esp32c2))]
+    fn read_into<const N: usize>(
         &mut self,
-    ) -> Result<heapless::Vec<AccessPointInfo, N>, WifiError> {
-        let mut scanned = heapless::Vec::<AccessPointInfo, N>::new();
-        let mut bss_total: u16 = N as u16;
-
-        unsafe {
-            let mut records: [MaybeUninit<crate::binary::include::wifi_ap_record_t>; N] =
-                [MaybeUninit::uninit(); N];
-
-            esp_wifi_result!(crate::binary::include::esp_wifi_scan_get_ap_records(
-                &mut bss_total,
-                records[0].as_mut_ptr(),
-            ))
-            .map_err(|e| {
-                // upon scan failure, list should be cleared to avoid memory leakage
-                crate::binary::include::esp_wifi_clear_ap_list();
-                e
-            })?;
-
-            for i in 0..bss_total {
-                let record = MaybeUninit::assume_init_ref(&records[i as usize]);
-                let ap_info = convert_ap_info(record);
-
-                scanned.push(ap_info).ok();
+        scanned: &mut heapless::Vec<AccessPointInfo, N>,
+    ) -> Result<(), WifiError> {
+        while !scanned.is_full() {
+            if let Some(record) = self.next() {
+                // It is okay to ignore the result here, because we checked previously whether the
+                // vector is full.
+                _ = scanned.push(record?);
+            } else {
+                break;
             }
         }
 
+        Ok(())
+    }
+
+    #[cfg(esp32c2)]
+    fn read_into<const N: usize>(
+        &mut self,
+        scanned: &mut heapless::Vec<AccessPointInfo, N>,
+    ) -> Result<(), WifiError> {
+        let mut bss_total: u16 = N as u16;
+        let mut records: [MaybeUninit<crate::binary::include::wifi_ap_record_t>; N] =
+            [MaybeUninit::uninit(); N];
+
+        unsafe {
+            esp_wifi_result!(crate::binary::include::esp_wifi_scan_get_ap_records(
+                &mut bss_total,
+                records[0].as_mut_ptr(),
+            ))?;
+
+            for i in 0..(bss_total as usize).min(N) {
+                if !scanned.is_full() {
+                    let record = MaybeUninit::assume_init_ref(&records[i]);
+                    let ap_info = convert_ap_info(record);
+                    scanned.push(ap_info).ok();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // `esp_wifi_scan_get_ap_records` frees the whole list, regardless of how many records were
+        // actually returned.
+        self.count = 0;
+        Ok(())
+    }
+
+    pub fn take_results<const N: usize>(
+        &mut self,
+    ) -> Result<heapless::Vec<AccessPointInfo, N>, WifiError> {
+        let mut scanned = heapless::Vec::<AccessPointInfo, N>::new();
+
+        self.read_into(&mut scanned)?;
+
         Ok(scanned)
+    }
+}
+
+#[cfg(not(esp32c2))]
+impl Iterator for ScanResults {
+    type Item = Result<AccessPointInfo, WifiError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        extern "C" {
+            fn esp_mesh_scan_get_ap_record(
+                ap_record: *mut crate::binary::include::wifi_ap_record_t,
+                buffer: *mut crate::binary::c_types::c_void,
+            ) -> crate::binary::include::esp_err_t;
+        }
+
+        if self.count == 0 {
+            return None;
+        }
+
+        self.count -= 1;
+
+        let mut record: MaybeUninit<crate::binary::include::wifi_ap_record_t> =
+            MaybeUninit::uninit();
+
+        unsafe {
+            let result = esp_wifi_result!(esp_mesh_scan_get_ap_record(
+                record.as_mut_ptr(),
+                core::ptr::null_mut(),
+            ));
+
+            match result {
+                Ok(_) => {
+                    let record = MaybeUninit::assume_init_ref(&record);
+                    let ap_info = convert_ap_info(record);
+
+                    Some(Ok(ap_info))
+                }
+
+                Err(e) => Some(Err(e)),
+            }
+        }
+    }
+}
+
+impl Drop for ScanResults {
+    fn drop(&mut self) {
+        unsafe {
+            crate::binary::include::esp_wifi_clear_ap_list();
+        }
     }
 }
 
@@ -1072,10 +1158,12 @@ impl Wifi for WifiController<'_> {
     ) -> Result<(heapless::Vec<AccessPointInfo, N>, usize), Self::Error> {
         esp_wifi_result!(crate::wifi::wifi_start_scan(true))?;
 
-        let count = self.scan_result_count()?;
-        let result = self.scan_results()?;
+        let mut scan_result = ScanResults::new();
 
-        Ok((result, count))
+        let count = scan_result.remaining();
+        let ap_list = scan_result.take_results()?;
+
+        Ok((ap_list, count))
     }
 
     /// Get the currently used configuration.
@@ -1398,10 +1486,12 @@ mod asynch {
             esp_wifi_result!(wifi_start_scan(false))?;
             WifiEventFuture::new(WifiEvent::ScanDone).await;
 
-            let count = self.scan_result_count()?;
-            let result = self.scan_results()?;
+            let mut scan_result = ScanResults::new();
 
-            Ok((result, count))
+            let count = scan_result.remaining();
+            let ap_list = scan_result.take_results()?;
+
+            Ok((ap_list, count))
         }
 
         /// Async version of [`embedded_svc::wifi::Wifi`]'s `start` method
