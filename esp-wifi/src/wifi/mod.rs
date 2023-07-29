@@ -1406,16 +1406,11 @@ mod asynch {
 
         /// Async version of [`embedded_svc::wifi::Wifi`]'s `start` method
         pub async fn start(&mut self) -> Result<(), WifiError> {
-            let is_ap = match self.config {
+            let event = match self.config {
                 embedded_svc::wifi::Configuration::None => panic!(),
-                embedded_svc::wifi::Configuration::Client(_) => false,
-                embedded_svc::wifi::Configuration::AccessPoint(_) => true,
+                embedded_svc::wifi::Configuration::Client(_) => WifiEvent::StaStart,
+                embedded_svc::wifi::Configuration::AccessPoint(_) => WifiEvent::ApStart,
                 embedded_svc::wifi::Configuration::Mixed(_, _) => panic!(),
-            };
-            let event = if is_ap {
-                WifiEvent::ApStart
-            } else {
-                WifiEvent::StaStart
             };
 
             Self::clear_events(event);
@@ -1427,16 +1422,11 @@ mod asynch {
 
         /// Async version of [`embedded_svc::wifi::Wifi`]'s `stop` method
         pub async fn stop(&mut self) -> Result<(), WifiError> {
-            let is_ap = match self.config {
+            let event = match self.config {
                 embedded_svc::wifi::Configuration::None => panic!(),
-                embedded_svc::wifi::Configuration::Client(_) => false,
-                embedded_svc::wifi::Configuration::AccessPoint(_) => true,
+                embedded_svc::wifi::Configuration::Client(_) => WifiEvent::StaStop,
+                embedded_svc::wifi::Configuration::AccessPoint(_) => WifiEvent::ApStop,
                 embedded_svc::wifi::Configuration::Mixed(_, _) => panic!(),
-            };
-            let event = if is_ap {
-                WifiEvent::ApStop
-            } else {
-                WifiEvent::StaStop
             };
 
             Self::clear_events(event);
