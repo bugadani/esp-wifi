@@ -672,6 +672,11 @@ fn decrement_inflight_counter() {
             Some(x.saturating_sub(1))
         })
         .unwrap();
+
+    debug!(
+        "tx inflight (decrement): {}",
+        WIFI_TX_INFLIGHT.load(Ordering::SeqCst)
+    );
 }
 
 #[ram]
@@ -1045,6 +1050,10 @@ where
     F: FnOnce(&mut [u8]) -> R,
 {
     WIFI_TX_INFLIGHT.fetch_add(1, Ordering::SeqCst);
+    debug!(
+        "tx inflight (consume): {}",
+        WIFI_TX_INFLIGHT.load(Ordering::SeqCst)
+    );
     // (safety): creation of multiple WiFi devices is impossible in safe Rust, therefore only smoltcp _or_ embassy-net can be used at one time
     // TODO: this probably won't do in AP-STA mode
     static mut BUFFER: [u8; DATA_FRAME_SIZE] = [0u8; DATA_FRAME_SIZE];
