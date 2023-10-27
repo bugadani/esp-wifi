@@ -683,11 +683,14 @@ fn decrement_inflight_counter() {
 unsafe extern "C" fn esp_wifi_tx_done_cb(
     _ifidx: u8,
     _data: *mut u8,
-    _data_len: *mut u16,
-    _tx_status: bool,
+    data_len: *mut u16,
+    tx_status: bool,
 ) {
-    trace!("esp_wifi_tx_done_cb");
-
+    info!(
+        "esp_wifi_tx_done_cb: len = {} tx_status = {:?}",
+        unsafe { *data_len },
+        tx_status
+    );
     decrement_inflight_counter();
 
     #[cfg(feature = "embassy-net")]
