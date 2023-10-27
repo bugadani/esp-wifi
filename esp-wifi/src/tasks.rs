@@ -61,7 +61,7 @@ pub extern "C" fn worker_task2() {
 
         // run the due timer callbacks NOT in an interrupt free context
         while let Some((fnc, arg)) = to_run.dequeue() {
-            trace!("trigger timer....");
+            debug!("calling timer callback {:x}", fnc);
             fnc(arg);
             trace!("timer callback called");
         }
