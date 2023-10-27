@@ -42,10 +42,12 @@ pub fn compat_timer_arm_us(ptimer: *mut c_types::c_void, us: u32, repeat: bool) 
                     timer.expire = ticks + systick;
                     timer.active = true;
                     timer.period = if repeat { ticks } else { 0 };
-                    break;
+                    return;
                 }
             }
         }
+
+        warn!("no timer found");
 
         memory_fence();
     });
@@ -61,10 +63,12 @@ pub fn compat_timer_disarm(ptimer: *mut c_types::c_void) {
                 if timer.ptimer == ptimer {
                     trace!("found timer ...");
                     timer.active = false;
-                    break;
+                    return;
                 }
             }
         }
+
+        warn!("no timer found");
 
         memory_fence();
     });
@@ -84,10 +88,12 @@ pub fn compat_timer_done(ptimer: *mut c_types::c_void) {
                     let ets_timer = ptimer as *mut ets_timer;
                     (*ets_timer).priv_ = core::ptr::null_mut();
                     (*ets_timer).expire = 0;
-                    break;
+                    return;
                 }
             }
         }
+
+        warn!("no timer found");
 
         memory_fence();
     });
@@ -138,9 +144,11 @@ pub fn compat_timer_setfn(
                         timer_ptr: pfunction,
                         arg_ptr: parg,
                     });
-                    break;
+                    return;
                 }
             }
+
+            warn!("no timer found");
         }
         memory_fence();
     });
